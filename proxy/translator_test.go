@@ -378,6 +378,112 @@ func TestConvertOpenAIToolsSanitizesSchemaAndDescription(t *testing.T) {
 	}
 }
 
+func TestOpenAIHostedWebSearchToolMapsToKiroTool(t *testing.T) {
+	req := &OpenAIRequest{
+		Model:    "claude-sonnet-4.5",
+		Messages: []OpenAIMessage{{Role: "user", Content: "search the web"}},
+		Tools:    []OpenAITool{{Type: "web_search_preview_2025_03_11"}},
+	}
+
+	payload := OpenAIToKiro(req, false)
+	if !payload.HostedWebSearch {
+		t.Fatalf("expected hosted web search flag")
+	}
+	ctx := payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext
+	if ctx == nil || len(ctx.Tools) != 1 {
+		t.Fatalf("expected one Kiro tool, got %#v", ctx)
+	}
+	if got := ctx.Tools[0].ToolSpecification.Name; got != kiroWebSearchToolName {
+		t.Fatalf("expected %q tool, got %q", kiroWebSearchToolName, got)
+	}
+}
+
+func TestClaudeHostedWebSearchToolMapsToKiroTool(t *testing.T) {
+	req := &ClaudeRequest{
+		Model:     "claude-sonnet-4.5",
+		MaxTokens: 256,
+		Messages:  []ClaudeMessage{{Role: "user", Content: "search the web"}},
+		Tools: []ClaudeTool{{
+			Type: "web_search_20250305",
+			Name: webSearchToolName,
+		}},
+	}
+
+	payload := ClaudeToKiro(req, false)
+	if !payload.HostedWebSearch {
+		t.Fatalf("expected hosted web search flag")
+	}
+	ctx := payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext
+	if ctx == nil || len(ctx.Tools) != 1 {
+		t.Fatalf("expected one Kiro tool, got %#v", ctx)
+	}
+	if got := ctx.Tools[0].ToolSpecification.Name; got != kiroWebSearchToolName {
+		t.Fatalf("expected %q tool, got %q", kiroWebSearchToolName, got)
+	}
+}
+
+func TestClaudeCodeWebSearchToolMapsToHostedKiroTool(t *testing.T) {
+	req := &ClaudeRequest{
+		Model:     "claude-sonnet-4.5",
+		MaxTokens: 256,
+		Messages:  []ClaudeMessage{{Role: "user", Content: "use WebSearch"}},
+		Tools: []ClaudeTool{{
+			Name:        "WebSearch",
+			Description: "Search the web",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"query"},
+			},
+		}},
+	}
+
+	payload := ClaudeToKiro(req, false)
+	if !payload.HostedWebSearch {
+		t.Fatalf("expected hosted web search flag")
+	}
+	ctx := payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext
+	if ctx == nil || len(ctx.Tools) != 1 {
+		t.Fatalf("expected one Kiro tool, got %#v", ctx)
+	}
+	if got := ctx.Tools[0].ToolSpecification.Name; got != kiroWebSearchToolName {
+		t.Fatalf("expected %q tool, got %q", kiroWebSearchToolName, got)
+	}
+}
+
+func TestClaudeCodeFetchToolMapsToHostedKiroTool(t *testing.T) {
+	req := &ClaudeRequest{
+		Model:     "claude-sonnet-4.5",
+		MaxTokens: 256,
+		Messages:  []ClaudeMessage{{Role: "user", Content: "fetch a URL"}},
+		Tools: []ClaudeTool{{
+			Name:        "Fetch",
+			Description: "Fetch a URL",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"url"},
+			},
+		}},
+	}
+
+	payload := ClaudeToKiro(req, false)
+	if !payload.HostedWebSearch {
+		t.Fatalf("expected hosted web tool flag")
+	}
+	ctx := payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext
+	if ctx == nil || len(ctx.Tools) != 1 {
+		t.Fatalf("expected one Kiro tool, got %#v", ctx)
+	}
+	if got := ctx.Tools[0].ToolSpecification.Name; got != kiroWebFetchToolName {
+		t.Fatalf("expected %q tool, got %q", kiroWebFetchToolName, got)
+	}
+}
+
 func schemaContainsKey(value interface{}, key string) bool {
 	switch v := value.(type) {
 	case map[string]interface{}:

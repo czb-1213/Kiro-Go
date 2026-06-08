@@ -163,9 +163,11 @@ type ImageSource struct {
 }
 
 type ClaudeTool struct {
+	Type        string      `json:"type,omitempty"`
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	InputSchema interface{} `json:"input_schema"`
+	MaxUses     int         `json:"max_uses,omitempty"`
 }
 
 type ClaudeResponse struct {
@@ -303,6 +305,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	// 构建 payload
 	payload := &KiroPayload{}
 	payload.ToolNameMap = toolNameMap
+	payload.HostedWebSearch = containsClaudeHostedWebSearchTool(req.Tools)
 	payload.ConversationState.ChatTriggerType = "MANUAL"
 	payload.ConversationState.AgentTaskType = "vibe"
 	payload.ConversationState.AgentContinuationId = uuid.New().String()
@@ -783,6 +786,14 @@ func convertClaudeTools(tools []ClaudeTool) ([]KiroToolWrapper, map[string]strin
 	result := make([]KiroToolWrapper, 0, len(tools))
 	nameMap := make(map[string]string)
 	for _, tool := range tools {
+		if isHostedWebSearchToolType(tool.Type) || isHostedWebSearchToolName(tool.Name) {
+			result = append(result, makeWebSearchKiroTool())
+			continue
+		}
+		if isHostedWebFetchToolName(tool.Name) {
+			result = append(result, makeWebFetchKiroTool())
+			continue
+		}
 		desc := tool.Description
 		if len(desc) > maxToolDescLen {
 			desc = desc[:maxToolDescLen] + "..."
@@ -798,6 +809,18 @@ func convertClaudeTools(tools []ClaudeTool) ([]KiroToolWrapper, map[string]strin
 		result = append(result, w)
 	}
 	return result, nameMap
+}
+
+func containsClaudeHostedWebSearchTool(tools []ClaudeTool) bool {
+	for _, tool := range tools {
+		if isHostedWebSearchToolType(tool.Type) || isHostedWebSearchToolName(tool.Name) {
+			return true
+		}
+		if isHostedWebFetchToolName(tool.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureObjectSchema 确保工具 schema 顶层是 object，并清理 Kiro 不接受的字段。
@@ -1247,6 +1270,7 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 
 	// 构建 payload
 	payload := &KiroPayload{}
+	payload.HostedWebSearch = containsOpenAIHostedWebSearchTool(req.Tools)
 	payload.ConversationState.ChatTriggerType = "MANUAL"
 	payload.ConversationState.ConversationID = buildConversationID(modelID, systemPrompt, firstOpenAIConversationAnchor(nonSystemMessages))
 	payload.ConversationState.CurrentMessage.UserInputMessage = KiroUserInputMessage{
@@ -1998,6 +2022,14 @@ func convertOpenAITools(tools []OpenAITool) []KiroToolWrapper {
 
 	result := make([]KiroToolWrapper, 0, len(tools))
 	for _, tool := range tools {
+		if isHostedWebSearchToolType(tool.Type) {
+			result = append(result, makeWebSearchKiroTool())
+			continue
+		}
+		if isHostedWebFetchToolName(tool.Function.Name) {
+			result = append(result, makeWebFetchKiroTool())
+			continue
+		}
 		if tool.Type != "function" {
 			continue
 		}
@@ -2017,6 +2049,18 @@ func convertOpenAITools(tools []OpenAITool) []KiroToolWrapper {
 		result = append(result, wrapper)
 	}
 	return result
+}
+
+func containsOpenAIHostedWebSearchTool(tools []OpenAITool) bool {
+	for _, tool := range tools {
+		if isHostedWebSearchToolType(tool.Type) {
+			return true
+		}
+		if isHostedWebFetchToolName(tool.Function.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // ==================== Kiro -> OpenAI 转换 ====================

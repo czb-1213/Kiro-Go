@@ -163,6 +163,11 @@ type KiroPayload struct {
 	// in tool_use responses so the client can match them to its tool registry.
 	// Not serialized to the Kiro API request body.
 	ToolNameMap map[string]string `json:"-"`
+
+	// HostedWebSearch marks requests that contain provider-native web search
+	// tools. These are resolved by the proxy through Kiro MCP instead of being
+	// returned to the client as ordinary function calls.
+	HostedWebSearch bool `json:"-"`
 }
 
 type KiroUserInputMessage struct {
