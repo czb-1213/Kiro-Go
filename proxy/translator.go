@@ -357,6 +357,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	}
 
 	truncatePayloadToLimit(payload, systemPrompt != "")
+	sanitizeCurrentToolResults(payload)
 
 	return payload
 }
@@ -1334,6 +1335,7 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 	}
 
 	truncatePayloadToLimit(payload, systemPrompt != "")
+	sanitizeCurrentToolResults(payload)
 
 	return payload
 }
@@ -1469,6 +1471,38 @@ func currentToolResultsMatchLastAssistant(history []KiroHistoryMessage, currentT
 		}
 	}
 	return true
+}
+
+// sanitizeCurrentToolResults is the final safety net before sending a payload
+// upstream. History compaction or request rebuilding can leave current
+// toolResults without a matching final assistant toolUse, which Kiro rejects as
+// an improperly formed request. In that case, preserve the result as plain text
+// and clear the structured result.
+func sanitizeCurrentToolResults(payload *KiroPayload) {
+	if payload == nil {
+		return
+	}
+	cur := &payload.ConversationState.CurrentMessage.UserInputMessage
+	if cur.UserInputMessageContext == nil || len(cur.UserInputMessageContext.ToolResults) == 0 {
+		return
+	}
+
+	toolResults := cur.UserInputMessageContext.ToolResults
+	toolResultIDs := collectToolResultIDs(toolResults)
+	if currentToolResultsCanStayStructured(payload.ConversationState.History, toolResults, toolResultIDs) {
+		return
+	}
+
+	toolNames := collectHistoryToolNames(payload.ConversationState.History)
+	narrated := narrateToolResults(toolResults, toolNames)
+	if narrated == "" {
+		narrated = buildToolResultsContinuation(toolResults)
+	}
+	cur.Content = joinHistoryText(cur.Content, narrated)
+	cur.UserInputMessageContext.ToolResults = nil
+	if len(cur.UserInputMessageContext.Tools) == 0 {
+		cur.UserInputMessageContext = nil
+	}
 }
 
 func collectHistoryToolNames(history []KiroHistoryMessage) map[string]string {

@@ -168,6 +168,34 @@ func TestClaudeToKiroFlattensParallelActiveToolResults(t *testing.T) {
 	}
 }
 
+func TestSanitizeCurrentToolResultsFlattensBrokenActivePair(t *testing.T) {
+	payload := &KiroPayload{}
+	payload.ConversationState.History = []KiroHistoryMessage{
+		{UserInputMessage: &KiroUserInputMessage{Content: "start"}},
+		{AssistantResponseMessage: &KiroAssistantResponseMessage{Content: "ok"}},
+	}
+	payload.ConversationState.CurrentMessage.UserInputMessage = KiroUserInputMessage{
+		Content: "continue",
+		UserInputMessageContext: &UserInputMessageContext{
+			ToolResults: []KiroToolResult{{
+				ToolUseID: "tooluse_orphan",
+				Status:    "success",
+				Content:   []KiroResultContent{{Text: "agent follow-up result"}},
+			}},
+		},
+	}
+
+	sanitizeCurrentToolResults(payload)
+
+	cur := payload.ConversationState.CurrentMessage.UserInputMessage
+	if cur.UserInputMessageContext != nil && len(cur.UserInputMessageContext.ToolResults) > 0 {
+		t.Fatalf("expected broken active tool result to be flattened, got %#v", cur.UserInputMessageContext.ToolResults)
+	}
+	if !strings.Contains(cur.Content, "continue") || !strings.Contains(cur.Content, "agent follow-up result") {
+		t.Fatalf("expected current content to preserve text and tool result, got %q", cur.Content)
+	}
+}
+
 func TestOpenAIToKiroFlattensParallelActiveToolResults(t *testing.T) {
 	req := &OpenAIRequest{
 		Model: "claude-sonnet-4.5",

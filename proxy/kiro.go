@@ -303,6 +303,7 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		}()
 	}
 	setPayloadProfileArnForAccount(payload, account)
+	sanitizeCurrentToolResults(payload)
 
 	if _, err := json.Marshal(payload); err != nil {
 		return err
