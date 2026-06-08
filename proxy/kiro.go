@@ -389,6 +389,9 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, ep.Name, string(errBody))
+			if resp.StatusCode == 400 {
+				logger.Warnf("[KiroAPI] Endpoint %s rejected payload summary: %s", ep.Name, summarizeKiroPayload(payload))
+			}
 			// Authentication errors and payment errors are not retried across endpoints.
 			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 402 {
 				return lastErr
@@ -406,6 +409,65 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		return lastErr
 	}
 	return fmt.Errorf("all endpoints failed")
+}
+
+func summarizeKiroPayload(payload *KiroPayload) string {
+	if payload == nil {
+		return "payload=nil"
+	}
+	body, _ := json.Marshal(payload)
+
+	current := payload.ConversationState.CurrentMessage.UserInputMessage
+	toolNames := make([]string, 0)
+	toolResultIDs := make([]string, 0)
+	if ctx := current.UserInputMessageContext; ctx != nil {
+		for _, tool := range ctx.Tools {
+			if name := tool.ToolSpecification.Name; name != "" {
+				toolNames = append(toolNames, name)
+			}
+		}
+		for _, result := range ctx.ToolResults {
+			if id := result.ToolUseID; id != "" {
+				toolResultIDs = append(toolResultIDs, id)
+			}
+		}
+	}
+
+	lastHistory := "none"
+	lastToolUses := 0
+	history := payload.ConversationState.History
+	if len(history) > 0 {
+		last := history[len(history)-1]
+		switch {
+		case last.AssistantResponseMessage != nil:
+			lastHistory = "assistant"
+			lastToolUses = len(last.AssistantResponseMessage.ToolUses)
+		case last.UserInputMessage != nil:
+			lastHistory = "user"
+		}
+	}
+
+	convID := payload.ConversationState.ConversationID
+	if len(convID) > 8 {
+		convID = convID[:8]
+	}
+
+	return fmt.Sprintf(
+		"bytes=%d conversation=%s history=%d lastHistory=%s lastToolUses=%d currentChars=%d currentImages=%d tools=%d toolNames=%s toolResults=%d toolResultIDs=%s hostedWeb=%t model=%s",
+		len(body),
+		convID,
+		len(history),
+		lastHistory,
+		lastToolUses,
+		len([]rune(current.Content)),
+		len(current.Images),
+		len(toolNames),
+		strings.Join(toolNames, ","),
+		len(toolResultIDs),
+		strings.Join(toolResultIDs, ","),
+		payload.HostedWebSearch,
+		current.ModelID,
+	)
 }
 
 // ==================== Event Stream Parsing ====================

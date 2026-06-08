@@ -7,6 +7,7 @@ import (
 	"kiro-go/config"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,6 +20,43 @@ func TestNormalizeChunkBasicProgression(t *testing.T) {
 	}
 	if got := normalizeChunk("abcde", &prev); got != "de" {
 		t.Fatalf("expected appended delta, got %q", got)
+	}
+}
+
+func TestSummarizeKiroPayloadOmitsContent(t *testing.T) {
+	payload := &KiroPayload{}
+	payload.ConversationState.ConversationID = "1234567890abcdef"
+	payload.ConversationState.CurrentMessage.UserInputMessage = KiroUserInputMessage{
+		Content: "secret user text",
+		ModelID: "claude-sonnet-4.5",
+		Origin:  "AI_EDITOR",
+		UserInputMessageContext: &UserInputMessageContext{
+			Tools: []KiroToolWrapper{{}},
+			ToolResults: []KiroToolResult{{
+				ToolUseID: "toolu_1",
+				Status:    "success",
+				Content:   []KiroResultContent{{Text: "secret tool output"}},
+			}},
+		},
+	}
+	payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools[0].ToolSpecification.Name = "Task"
+	payload.ConversationState.History = []KiroHistoryMessage{{
+		AssistantResponseMessage: &KiroAssistantResponseMessage{
+			ToolUses: []KiroToolUse{{ToolUseID: "toolu_1", Name: "Task"}},
+		},
+	}}
+
+	summary := summarizeKiroPayload(payload)
+
+	for _, forbidden := range []string{"secret user text", "secret tool output"} {
+		if strings.Contains(summary, forbidden) {
+			t.Fatalf("summary leaked request content %q: %s", forbidden, summary)
+		}
+	}
+	for _, expected := range []string{"conversation=12345678", "history=1", "lastToolUses=1", "tools=1", "toolNames=Task", "toolResults=1"} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("summary missing %q: %s", expected, summary)
+		}
 	}
 }
 

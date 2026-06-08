@@ -309,7 +309,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	payload.ConversationState.ChatTriggerType = "MANUAL"
 	payload.ConversationState.AgentTaskType = "vibe"
 	payload.ConversationState.AgentContinuationId = uuid.New().String()
-	payload.ConversationState.ConversationID = buildConversationID(modelID, systemPrompt, firstClaudeConversationAnchor(req.Messages))
+	payload.ConversationState.ConversationID = buildClaudeConversationID(req, modelID, systemPrompt)
 	payload.ConversationState.CurrentMessage.UserInputMessage = KiroUserInputMessage{
 		Content: finalContent,
 		ModelID: modelID,
@@ -1823,6 +1823,36 @@ func firstClaudeConversationAnchor(messages []ClaudeMessage) string {
 	}
 
 	return ""
+}
+
+func buildClaudeConversationID(req *ClaudeRequest, modelID, systemPrompt string) string {
+	if isClaudeCodeRequest(req) {
+		return uuid.New().String()
+	}
+	if req == nil {
+		return buildConversationID(modelID, systemPrompt, "")
+	}
+	return buildConversationID(modelID, systemPrompt, firstClaudeConversationAnchor(req.Messages))
+}
+
+func isClaudeCodeRequest(req *ClaudeRequest) bool {
+	if req == nil {
+		return false
+	}
+	if isClaudeCodeSystemPrompt(extractSystemPrompt(req.System)) {
+		return true
+	}
+
+	markerCount := 0
+	for _, tool := range req.Tools {
+		switch tool.Name {
+		case "Task":
+			return true
+		case "Bash", "Read", "Write", "Edit", "MultiEdit", "TodoRead", "TodoWrite", "Glob", "Grep", "LS", "WebSearch", "Fetch", "WebFetch", "NotebookRead", "NotebookEdit":
+			markerCount++
+		}
+	}
+	return markerCount >= 2
 }
 
 func firstOpenAIConversationAnchor(messages []OpenAIMessage) string {

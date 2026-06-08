@@ -284,6 +284,48 @@ func TestKiroToClaudeResponseCanEmitEmptyThinkingBlock(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeRequestsUseFreshConversationID(t *testing.T) {
+	req := &ClaudeRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: "inspect the repository"},
+		},
+		Tools: []ClaudeTool{
+			{Name: "Task", Description: "Run a subagent", InputSchema: map[string]interface{}{"type": "object"}},
+			{Name: "Bash", Description: "Run shell", InputSchema: map[string]interface{}{"type": "object"}},
+		},
+	}
+
+	first := ClaudeToKiro(req, false).ConversationState.ConversationID
+	second := ClaudeToKiro(req, false).ConversationState.ConversationID
+
+	if first == "" || second == "" {
+		t.Fatalf("expected non-empty conversation IDs")
+	}
+	if first == second {
+		t.Fatalf("expected Claude Code requests to avoid stable conversation ID reuse, got %q", first)
+	}
+}
+
+func TestRegularClaudeRequestsKeepStableConversationID(t *testing.T) {
+	req := &ClaudeRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: "hello"},
+		},
+		Tools: []ClaudeTool{
+			{Name: "lookup", Description: "Lookup data", InputSchema: map[string]interface{}{"type": "object"}},
+		},
+	}
+
+	first := ClaudeToKiro(req, false).ConversationState.ConversationID
+	second := ClaudeToKiro(req, false).ConversationState.ConversationID
+
+	if first == "" || first != second {
+		t.Fatalf("expected regular Claude request conversation ID to remain stable, got %q and %q", first, second)
+	}
+}
+
 func TestToolResultsContinuationIncludesInstructionPrefix(t *testing.T) {
 	req := &OpenAIRequest{
 		Model: "claude-sonnet-4.5",
