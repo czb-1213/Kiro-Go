@@ -211,3 +211,45 @@ func TestOpenAIToKiroFlattensParallelActiveToolResults(t *testing.T) {
 		t.Fatalf("expected flattened current content to preserve named tool results, got %q", cur.Content)
 	}
 }
+
+func TestHostedWebFollowupFlattensParallelToolResults(t *testing.T) {
+	base := &KiroPayload{}
+	base.HostedWebSearch = true
+	base.ConversationState.CurrentMessage.UserInputMessage = KiroUserInputMessage{
+		Content: "search and fetch",
+		ModelID: "claude-opus-4.8",
+		Origin:  "AI_EDITOR",
+		UserInputMessageContext: &UserInputMessageContext{
+			Tools: []KiroToolWrapper{makeWebSearchKiroTool(), makeWebFetchKiroTool()},
+		},
+	}
+	toolUses := []KiroToolUse{
+		{ToolUseID: "search_1", Name: kiroWebSearchToolName, Input: map[string]interface{}{"query": "kiro"}},
+		{ToolUseID: "fetch_1", Name: kiroWebFetchToolName, Input: map[string]interface{}{"url": "https://example.com"}},
+	}
+	results := []KiroToolResult{
+		{ToolUseID: "search_1", Status: "success", Content: []KiroResultContent{{Text: "search result"}}},
+		{ToolUseID: "fetch_1", Status: "success", Content: []KiroResultContent{{Text: "fetch result"}}},
+	}
+
+	next := buildWebSearchFollowupPayload(base, toolUses, results)
+	if next == nil {
+		t.Fatalf("expected follow-up payload")
+	}
+
+	for i, h := range next.ConversationState.History {
+		if h.AssistantResponseMessage != nil && len(h.AssistantResponseMessage.ToolUses) > 0 {
+			t.Fatalf("history[%d] kept parallel hosted tool uses", i)
+		}
+	}
+	cur := next.ConversationState.CurrentMessage.UserInputMessage
+	if cur.UserInputMessageContext == nil || len(cur.UserInputMessageContext.Tools) != 2 {
+		t.Fatalf("expected hosted tool specs to be retained, got %#v", cur.UserInputMessageContext)
+	}
+	if len(cur.UserInputMessageContext.ToolResults) > 0 {
+		t.Fatalf("parallel hosted tool results must be flattened, got %#v", cur.UserInputMessageContext.ToolResults)
+	}
+	if !strings.Contains(cur.Content, "[webSearch] search result") || !strings.Contains(cur.Content, "[fetch] fetch result") {
+		t.Fatalf("expected flattened hosted tool results with names, got %q", cur.Content)
+	}
+}

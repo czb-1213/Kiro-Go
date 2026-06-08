@@ -222,17 +222,38 @@ func buildWebSearchFollowupPayload(base *KiroPayload, toolUses []KiroToolUse, re
 		KiroHistoryMessage{UserInputMessage: &historyUser},
 		KiroHistoryMessage{AssistantResponseMessage: &KiroAssistantResponseMessage{ToolUses: toolUses}},
 	)
+
+	toolResultIDs := collectToolResultIDs(results)
+	toolResultNames := collectHistoryToolNames(history)
+	keepToolResults := currentToolResultsCanStayStructured(history, results, toolResultIDs)
+	if keepToolResults {
+		history = sanitizeKiroHistory(history, toolResultIDs)
+	} else {
+		history = sanitizeKiroHistory(history, nil)
+	}
+
+	content := buildToolResultsContinuation(results)
+	if !keepToolResults {
+		if flattened := narrateToolResults(results, toolResultNames); flattened != "" {
+			content = flattened
+		}
+	}
+
 	next.ConversationState.History = history
 	next.ConversationState.CurrentMessage.UserInputMessage = KiroUserInputMessage{
-		Content: buildToolResultsContinuation(results),
+		Content: content,
 		ModelID: current.ModelID,
 		Origin:  current.Origin,
-		UserInputMessageContext: &UserInputMessageContext{
-			ToolResults: results,
-		},
 	}
+	ctx := &UserInputMessageContext{}
 	if current.UserInputMessageContext != nil && len(current.UserInputMessageContext.Tools) > 0 {
-		next.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools = current.UserInputMessageContext.Tools
+		ctx.Tools = current.UserInputMessageContext.Tools
+	}
+	if keepToolResults {
+		ctx.ToolResults = results
+	}
+	if len(ctx.Tools) > 0 || len(ctx.ToolResults) > 0 {
+		next.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext = ctx
 	}
 	return &next
 }
