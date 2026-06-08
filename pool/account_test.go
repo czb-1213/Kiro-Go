@@ -171,6 +171,7 @@ func newTestPool(accounts ...config.Account) *AccountPool {
 		cooldowns:   make(map[string]time.Time),
 		errorCounts: make(map[string]int),
 		modelLists:  make(map[string]map[string]bool),
+		inFlight:    make(map[string]int),
 	}
 	p.accounts = accounts
 	return p
@@ -207,6 +208,45 @@ func TestGetNextForModelExcludingReturnsNilOnEmptyPool(t *testing.T) {
 	if acc != nil {
 		t.Fatalf("expected nil for empty pool, got %q", acc.ID)
 	}
+}
+
+func TestAcquireNextForModelExcludingSkipsInFlightAccount(t *testing.T) {
+	p := newTestPool(
+		config.Account{ID: "a"},
+		config.Account{ID: "b"},
+	)
+
+	first, busy := p.AcquireNextForModelExcluding("model", nil)
+	if first == nil {
+		t.Fatal("expected first account, got nil")
+	}
+	if busy {
+		t.Fatal("first acquire should not report busy accounts")
+	}
+
+	second, busy := p.AcquireNextForModelExcluding("model", nil)
+	if second == nil {
+		t.Fatal("expected second account, got nil")
+	}
+	if second.ID == first.ID {
+		t.Fatalf("expected acquire to skip in-flight account %q", first.ID)
+	}
+	_ = busy
+
+	third, busy := p.AcquireNextForModelExcluding("model", nil)
+	if third != nil {
+		t.Fatalf("expected nil when all accounts are in flight, got %q", third.ID)
+	}
+	if !busy {
+		t.Fatal("expected busy=true when all eligible accounts are in flight")
+	}
+
+	p.Release(first.ID)
+	reused, busy := p.AcquireNextForModelExcluding("model", nil)
+	if reused == nil || reused.ID != first.ID {
+		t.Fatalf("expected released account %q to be reusable, got %#v", first.ID, reused)
+	}
+	_ = busy
 }
 
 // ---------------------------------------------------------------------------

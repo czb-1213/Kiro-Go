@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"kiro-go/config"
+	"kiro-go/logger"
 	"net/http"
 	"strings"
 	"time"
@@ -132,11 +133,12 @@ func (h *Handler) handleResponsesNonStream(
 	var lastErr error
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.pool.GetNextForModelExcluding(model, excluded)
+		account := h.acquireAccountForModel(model, excluded)
 		if account == nil {
 			break
 		}
 		if err := h.ensureValidToken(account); err != nil {
+			h.pool.Release(account.ID)
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -166,7 +168,9 @@ func (h *Handler) handleResponsesNonStream(
 		}
 
 		err := CallKiroAPIWithHostedTools(account, payload, callback)
+		h.pool.Release(account.ID)
 		if err != nil {
+			logger.Warnf("[ResponsesNonStream] Account %s failed: %v; summary: %s", account.Email, err, summarizeKiroPayload(payload))
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -315,11 +319,12 @@ func (h *Handler) handleResponsesStream(
 	responseStarted := false
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.pool.GetNextForModelExcluding(model, excluded)
+		account := h.acquireAccountForModel(model, excluded)
 		if account == nil {
 			break
 		}
 		if err := h.ensureValidToken(account); err != nil {
+			h.pool.Release(account.ID)
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -468,7 +473,9 @@ func (h *Handler) handleResponsesStream(
 		}
 
 		err := CallKiroAPIWithHostedTools(account, payload, callback)
+		h.pool.Release(account.ID)
 		if err != nil {
+			logger.Warnf("[ResponsesStream] Account %s failed: %v; summary: %s", account.Email, err, summarizeKiroPayload(payload))
 			if !responseStarted {
 				lastErr = err
 				excluded[account.ID] = true

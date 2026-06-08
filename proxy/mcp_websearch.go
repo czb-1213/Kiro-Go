@@ -115,7 +115,15 @@ func CallKiroAPIWithHostedTools(account *config.Account, payload *KiroPayload, c
 		emitHostedToolResultsFallback(callback, hostedResults, hostedToolNames)
 		return nil
 	}
-	return fmt.Errorf("web_search exceeded %d internal rounds", maxHostedWebSearchRounds)
+	if len(hostedResults) > 0 {
+		emitHostedToolResultsFallback(callback, hostedResults, hostedToolNames)
+		return nil
+	}
+	if callback != nil && callback.OnText != nil {
+		callback.OnText(fmt.Sprintf("Web search stopped after %d internal rounds without a final answer.", maxHostedWebSearchRounds), false)
+		return nil
+	}
+	return nil
 }
 
 func emitHostedToolResultsFallback(callback *KiroStreamCallback, results []KiroToolResult, names map[string]string) {

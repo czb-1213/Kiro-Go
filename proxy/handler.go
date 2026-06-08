@@ -18,6 +18,7 @@ import (
 )
 
 const tokenRefreshSkewSeconds int64 = 120
+const accountAcquireWait = 45 * time.Second
 
 // Handler HTTP 处理器
 type Handler struct {
@@ -38,6 +39,20 @@ type Handler struct {
 	modelsCacheTime int64
 	promptCache     *promptCacheTracker
 	tokenRefreshMu  sync.Mutex
+}
+
+func (h *Handler) acquireAccountForModel(model string, excluded map[string]bool) *config.Account {
+	deadline := time.Now().Add(accountAcquireWait)
+	for {
+		account, busy := h.pool.AcquireNextForModelExcluding(model, excluded)
+		if account != nil {
+			return account
+		}
+		if !busy || time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 type thinkingStreamSource int
@@ -867,11 +882,12 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, payload *KiroPayload
 	}
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.pool.GetNextForModelExcluding(model, excluded)
+		account := h.acquireAccountForModel(model, excluded)
 		if account == nil {
 			break
 		}
 		if err := h.ensureValidToken(account); err != nil {
+			h.pool.Release(account.ID)
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -1196,7 +1212,9 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, payload *KiroPayload
 		}
 
 		err := CallKiroAPIWithHostedTools(account, payload, callback)
+		h.pool.Release(account.ID)
 		if err != nil {
+			logger.Warnf("[ClaudeStream] Account %s failed: %v; summary: %s", account.Email, err, summarizeKiroPayload(payload))
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -1345,11 +1363,12 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, payload *KiroPayl
 	var lastErr error
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.pool.GetNextForModelExcluding(model, excluded)
+		account := h.acquireAccountForModel(model, excluded)
 		if account == nil {
 			break
 		}
 		if err := h.ensureValidToken(account); err != nil {
+			h.pool.Release(account.ID)
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -1388,7 +1407,9 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, payload *KiroPayl
 		}
 
 		err := CallKiroAPIWithHostedTools(account, payload, callback)
+		h.pool.Release(account.ID)
 		if err != nil {
+			logger.Warnf("[ClaudeNonStream] Account %s failed: %v; summary: %s", account.Email, err, summarizeKiroPayload(payload))
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -1530,11 +1551,12 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, payload *KiroPayload
 	var lastErr error
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.pool.GetNextForModelExcluding(model, excluded)
+		account := h.acquireAccountForModel(model, excluded)
 		if account == nil {
 			break
 		}
 		if err := h.ensureValidToken(account); err != nil {
+			h.pool.Release(account.ID)
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -1823,7 +1845,9 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, payload *KiroPayload
 		}
 
 		err := CallKiroAPIWithHostedTools(account, payload, callback)
+		h.pool.Release(account.ID)
 		if err != nil {
+			logger.Warnf("[OpenAIStream] Account %s failed: %v; summary: %s", account.Email, err, summarizeKiroPayload(payload))
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -1905,11 +1929,12 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, payload *KiroPayl
 	var lastErr error
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.pool.GetNextForModelExcluding(model, excluded)
+		account := h.acquireAccountForModel(model, excluded)
 		if account == nil {
 			break
 		}
 		if err := h.ensureValidToken(account); err != nil {
+			h.pool.Release(account.ID)
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
@@ -1940,7 +1965,9 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, payload *KiroPayl
 		}
 
 		err := CallKiroAPIWithHostedTools(account, payload, callback)
+		h.pool.Release(account.ID)
 		if err != nil {
+			logger.Warnf("[OpenAINonStream] Account %s failed: %v; summary: %s", account.Email, err, summarizeKiroPayload(payload))
 			lastErr = err
 			excluded[account.ID] = true
 			h.handleAccountFailure(account, err)
