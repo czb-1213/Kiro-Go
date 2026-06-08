@@ -54,16 +54,28 @@ func CallKiroAPIWithHostedTools(account *config.Account, payload *KiroPayload, c
 	}
 
 	current := payload
+	var hostedResults []KiroToolResult
+	hostedToolNames := make(map[string]string)
+	emittedDownstream := false
 	for round := 0; round < maxHostedWebSearchRounds; round++ {
 		var hostedToolUses []KiroToolUse
 		wrapped := callback
 		if callback != nil {
 			next := *callback
+			next.OnText = func(text string, isThinking bool) {
+				if strings.TrimSpace(text) != "" && !isThinking {
+					emittedDownstream = true
+				}
+				if callback.OnText != nil {
+					callback.OnText(text, isThinking)
+				}
+			}
 			next.OnToolUse = func(tu KiroToolUse) {
 				if isHostedWebToolUse(tu) {
 					hostedToolUses = append(hostedToolUses, tu)
 					return
 				}
+				emittedDownstream = true
 				if callback.OnToolUse != nil {
 					callback.OnToolUse(tu)
 				}
@@ -75,6 +87,9 @@ func CallKiroAPIWithHostedTools(account *config.Account, payload *KiroPayload, c
 			return err
 		}
 		if len(hostedToolUses) == 0 {
+			if !emittedDownstream && len(hostedResults) > 0 {
+				emitHostedToolResultsFallback(callback, hostedResults, hostedToolNames)
+			}
 			return nil
 		}
 
@@ -82,12 +97,43 @@ func CallKiroAPIWithHostedTools(account *config.Account, payload *KiroPayload, c
 		if err != nil {
 			return err
 		}
+		for _, tu := range hostedToolUses {
+			if tu.ToolUseID != "" && tu.Name != "" {
+				hostedToolNames[tu.ToolUseID] = tu.Name
+			}
+		}
+		hostedResults = append(hostedResults, results...)
 		current = buildWebSearchFollowupPayload(current, hostedToolUses, results)
 		if current == nil {
+			if !emittedDownstream && len(hostedResults) > 0 {
+				emitHostedToolResultsFallback(callback, hostedResults, hostedToolNames)
+			}
 			return nil
 		}
 	}
+	if !emittedDownstream && len(hostedResults) > 0 {
+		emitHostedToolResultsFallback(callback, hostedResults, hostedToolNames)
+		return nil
+	}
 	return fmt.Errorf("web_search exceeded %d internal rounds", maxHostedWebSearchRounds)
+}
+
+func emitHostedToolResultsFallback(callback *KiroStreamCallback, results []KiroToolResult, names map[string]string) {
+	if callback == nil || callback.OnText == nil {
+		return
+	}
+	text := hostedToolResultsFallbackText(results, names)
+	if strings.TrimSpace(text) != "" {
+		callback.OnText(text, false)
+	}
+}
+
+func hostedToolResultsFallbackText(results []KiroToolResult, names map[string]string) string {
+	text := narrateToolResults(results, names)
+	if strings.TrimSpace(text) == "" {
+		text = buildToolResultsContinuation(results)
+	}
+	return truncateRunes(text, maxHostedFetchTextChars)
 }
 
 func isHostedWebSearchToolType(toolType string) bool {

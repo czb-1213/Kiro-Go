@@ -253,3 +253,20 @@ func TestHostedWebFollowupFlattensParallelToolResults(t *testing.T) {
 		t.Fatalf("expected flattened hosted tool results with names, got %q", cur.Content)
 	}
 }
+
+func TestHostedToolResultsFallbackTextPreservesResults(t *testing.T) {
+	results := []KiroToolResult{
+		{ToolUseID: "search_1", Status: "success", Content: []KiroResultContent{{Text: "search result"}}},
+		{ToolUseID: "fetch_1", Status: "success", Content: []KiroResultContent{{Text: "fetch result"}}},
+	}
+	names := map[string]string{
+		"search_1": kiroWebSearchToolName,
+		"fetch_1":  kiroWebFetchToolName,
+	}
+
+	text := hostedToolResultsFallbackText(results, names)
+
+	if !strings.Contains(text, "[webSearch] search result") || !strings.Contains(text, "[fetch] fetch result") {
+		t.Fatalf("expected fallback text to preserve hosted tool results, got %q", text)
+	}
+}
