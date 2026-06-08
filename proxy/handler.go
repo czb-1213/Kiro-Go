@@ -19,6 +19,9 @@ import (
 
 const tokenRefreshSkewSeconds int64 = 120
 const accountAcquireWait = 45 * time.Second
+const streamAccountAcquireWait = 10 * time.Minute
+const accountAcquirePollInterval = 250 * time.Millisecond
+const streamAccountAcquireKeepalive = 15 * time.Second
 
 // Handler HTTP 处理器
 type Handler struct {
@@ -42,7 +45,16 @@ type Handler struct {
 }
 
 func (h *Handler) acquireAccountForModel(model string, excluded map[string]bool) *config.Account {
-	deadline := time.Now().Add(accountAcquireWait)
+	return h.acquireAccountForModelWithWait(model, excluded, accountAcquireWait, nil)
+}
+
+func (h *Handler) acquireAccountForModelForStream(model string, excluded map[string]bool, keepalive func()) *config.Account {
+	return h.acquireAccountForModelWithWait(model, excluded, streamAccountAcquireWait, keepalive)
+}
+
+func (h *Handler) acquireAccountForModelWithWait(model string, excluded map[string]bool, wait time.Duration, keepalive func()) *config.Account {
+	deadline := time.Now().Add(wait)
+	nextKeepalive := time.Now().Add(streamAccountAcquireKeepalive)
 	for {
 		account, busy := h.pool.AcquireNextForModelExcluding(model, excluded)
 		if account != nil {
@@ -51,7 +63,17 @@ func (h *Handler) acquireAccountForModel(model string, excluded map[string]bool)
 		if !busy || time.Now().After(deadline) {
 			return nil
 		}
-		time.Sleep(250 * time.Millisecond)
+		if keepalive != nil && !time.Now().Before(nextKeepalive) {
+			keepalive()
+			nextKeepalive = time.Now().Add(streamAccountAcquireKeepalive)
+		}
+		sleep := accountAcquirePollInterval
+		if remaining := time.Until(deadline); remaining < sleep {
+			sleep = remaining
+		}
+		if sleep > 0 {
+			time.Sleep(sleep)
+		}
 	}
 }
 
@@ -882,7 +904,9 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, payload *KiroPayload
 	}
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.acquireAccountForModel(model, excluded)
+		account := h.acquireAccountForModelForStream(model, excluded, func() {
+			h.sendSSEComment(w, flusher, "waiting for available account")
+		})
 		if account == nil {
 			break
 		}
@@ -1276,17 +1300,29 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, payload *KiroPayload
 	}
 
 	if lastErr == nil {
-		h.sendClaudeError(w, 503, "api_error", "No available accounts")
+		h.sendSSE(w, flusher, "error", map[string]interface{}{
+			"type":  "error",
+			"error": map[string]string{"type": "overloaded_error", "message": "No available accounts"},
+		})
 		return
 	}
 
 	h.recordFailure()
-	h.sendClaudeError(w, 500, "api_error", lastErr.Error())
+	h.sendSSE(w, flusher, "error", map[string]interface{}{
+		"type":  "error",
+		"error": map[string]string{"type": "api_error", "message": lastErr.Error()},
+	})
 }
 
 func (h *Handler) sendSSE(w http.ResponseWriter, flusher http.Flusher, event string, data interface{}) {
 	jsonData, _ := json.Marshal(data)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, string(jsonData))
+	flusher.Flush()
+}
+
+func (h *Handler) sendSSEComment(w http.ResponseWriter, flusher http.Flusher, comment string) {
+	comment = strings.ReplaceAll(comment, "\n", " ")
+	fmt.Fprintf(w, ": %s\n\n", comment)
 	flusher.Flush()
 }
 
@@ -1551,7 +1587,9 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, payload *KiroPayload
 	var lastErr error
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.acquireAccountForModel(model, excluded)
+		account := h.acquireAccountForModelForStream(model, excluded, func() {
+			h.sendSSEComment(w, flusher, "waiting for available account")
+		})
 		if account == nil {
 			break
 		}
@@ -1915,12 +1953,28 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, payload *KiroPayload
 	}
 
 	if lastErr == nil {
-		h.sendOpenAIError(w, 503, "server_error", "No available accounts")
+		data, _ := json.Marshal(map[string]interface{}{
+			"error": map[string]interface{}{
+				"type":    "server_error",
+				"message": "No available accounts",
+			},
+		})
+		fmt.Fprintf(w, "data: %s\n\n", string(data))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
 		return
 	}
 
 	h.recordFailure()
-	h.sendOpenAIError(w, 500, "server_error", lastErr.Error())
+	data, _ := json.Marshal(map[string]interface{}{
+		"error": map[string]interface{}{
+			"type":    "server_error",
+			"message": lastErr.Error(),
+		},
+	})
+	fmt.Fprintf(w, "data: %s\n\n", string(data))
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 // handleOpenAINonStream OpenAI 非流式响应

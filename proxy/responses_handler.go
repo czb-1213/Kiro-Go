@@ -319,7 +319,9 @@ func (h *Handler) handleResponsesStream(
 	responseStarted := false
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.acquireAccountForModel(model, excluded)
+		account := h.acquireAccountForModelForStream(model, excluded, func() {
+			h.sendSSEComment(w, flusher, "waiting for available account")
+		})
 		if account == nil {
 			break
 		}
