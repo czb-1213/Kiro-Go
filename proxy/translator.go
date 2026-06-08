@@ -287,6 +287,10 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	} else {
 		history = sanitizeKiroHistory(history, nil)
 	}
+	if keepCurrentToolResults && !currentToolResultsMatchLastAssistant(history, currentToolResultIDs) {
+		keepCurrentToolResults = false
+		history = sanitizeKiroHistory(history, nil)
+	}
 
 	flattenedToolResults := ""
 	if len(currentToolResults) > 0 && !keepCurrentToolResults {
@@ -1261,6 +1265,10 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 	if keepCurrentToolResults {
 		history = sanitizeKiroHistory(history, currentToolResultIDs)
 	} else {
+		history = sanitizeKiroHistory(history, nil)
+	}
+	if keepCurrentToolResults && !currentToolResultsMatchLastAssistant(history, currentToolResultIDs) {
+		keepCurrentToolResults = false
 		history = sanitizeKiroHistory(history, nil)
 	}
 
