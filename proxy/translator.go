@@ -277,7 +277,8 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	// (orphaned tool results, e.g. after context compaction), flatten them into
 	// the current message text so the upstream does not reject the request.
 	currentToolResultIDs := collectToolResultIDs(currentToolResults)
-	keepCurrentToolResults := currentToolResultsMatchLastAssistant(history, currentToolResultIDs)
+	currentToolResultNames := collectHistoryToolNames(history)
+	keepCurrentToolResults := currentToolResultsCanStayStructured(history, currentToolResults, currentToolResultIDs)
 
 	// Flatten structured tool calls/results that live in history; upstream only
 	// accepts a single active tool turn (last assistant toolUses ⟺ current toolResults).
@@ -287,14 +288,23 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 		history = sanitizeKiroHistory(history, nil)
 	}
 
+	flattenedToolResults := ""
+	if len(currentToolResults) > 0 && !keepCurrentToolResults {
+		flattenedToolResults = narrateToolResults(currentToolResults, currentToolResultNames)
+	}
+
 	// 构建最终内容
 	finalContent := ""
 	if currentContent != "" {
-		finalContent = currentContent
+		finalContent = joinHistoryText(currentContent, flattenedToolResults)
 	} else if len(currentImages) > 0 {
 		finalContent = normalizeUserContent("", true)
 	} else if len(currentToolResults) > 0 {
-		finalContent = buildToolResultsContinuation(currentToolResults)
+		if flattenedToolResults != "" {
+			finalContent = flattenedToolResults
+		} else {
+			finalContent = buildToolResultsContinuation(currentToolResults)
+		}
 	} else {
 		finalContent = minimalFallbackUserContent
 	}
@@ -1245,7 +1255,8 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 	// Decide whether current tool results form a valid active tool turn; if not,
 	// flatten them into the current message text (see ClaudeToKiro for rationale).
 	currentToolResultIDs := collectToolResultIDs(currentToolResults)
-	keepCurrentToolResults := currentToolResultsMatchLastAssistant(history, currentToolResultIDs)
+	currentToolResultNames := collectHistoryToolNames(history)
+	keepCurrentToolResults := currentToolResultsCanStayStructured(history, currentToolResults, currentToolResultIDs)
 
 	if keepCurrentToolResults {
 		history = sanitizeKiroHistory(history, currentToolResultIDs)
@@ -1254,12 +1265,23 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 	}
 
 	// 构建最终内容
+	flattenedToolResults := ""
+	if len(currentToolResults) > 0 && !keepCurrentToolResults {
+		flattenedToolResults = narrateToolResults(currentToolResults, currentToolResultNames)
+	}
 	finalContent := currentContent
+	if finalContent != "" && flattenedToolResults != "" {
+		finalContent = joinHistoryText(finalContent, flattenedToolResults)
+	}
 	if finalContent == "" {
 		if len(currentImages) > 0 {
 			finalContent = normalizeUserContent("", true)
 		} else if len(currentToolResults) > 0 {
-			finalContent = buildToolResultsContinuation(currentToolResults)
+			if flattenedToolResults != "" {
+				finalContent = flattenedToolResults
+			} else {
+				finalContent = buildToolResultsContinuation(currentToolResults)
+			}
 		} else {
 			finalContent = minimalFallbackUserContent
 		}
@@ -1409,6 +1431,16 @@ func collectToolResultIDs(toolResults []KiroToolResult) map[string]bool {
 	return ids
 }
 
+func currentToolResultsCanStayStructured(history []KiroHistoryMessage, currentToolResults []KiroToolResult, currentToolResultIDs map[string]bool) bool {
+	// Kiro's upstream accepts only one active structured tool turn. Claude Code
+	// and Codex can return multiple parallel tool results; those are flattened
+	// into plain text so the model can continue without triggering HTTP 400.
+	if len(currentToolResults) != 1 || len(currentToolResultIDs) != 1 {
+		return false
+	}
+	return currentToolResultsMatchLastAssistant(history, currentToolResultIDs)
+}
+
 // currentToolResultsMatchLastAssistant reports whether the current message's
 // tool results answer the structured tool calls of the final history assistant
 // message. Only in that case may the current toolResults stay structured.
@@ -1420,12 +1452,29 @@ func currentToolResultsMatchLastAssistant(history []KiroHistoryMessage, currentT
 	if last.AssistantResponseMessage == nil || len(last.AssistantResponseMessage.ToolUses) == 0 {
 		return false
 	}
+	if len(last.AssistantResponseMessage.ToolUses) != len(currentToolResultIDs) {
+		return false
+	}
 	for _, tu := range last.AssistantResponseMessage.ToolUses {
 		if !currentToolResultIDs[tu.ToolUseID] {
 			return false
 		}
 	}
 	return true
+}
+
+func collectHistoryToolNames(history []KiroHistoryMessage) map[string]string {
+	toolNames := make(map[string]string)
+	for i := range history {
+		if a := history[i].AssistantResponseMessage; a != nil {
+			for _, tu := range a.ToolUses {
+				if tu.ToolUseID != "" && tu.Name != "" {
+					toolNames[tu.ToolUseID] = tu.Name
+				}
+			}
+		}
+	}
+	return toolNames
 }
 
 // pollutedToolCallTextPattern matches the legacy "[Called tool X with input ...]"
@@ -1519,16 +1568,7 @@ func sanitizeKiroHistory(history []KiroHistoryMessage, currentToolResultIDs map[
 	// Map every tool-use ID to its tool name across all assistant turns, so a
 	// user "Tool results" turn can attribute each result to its originating tool
 	// even after the structured toolUses are stripped from the assistant turn.
-	toolNames := make(map[string]string)
-	for i := range history {
-		if a := history[i].AssistantResponseMessage; a != nil {
-			for _, tu := range a.ToolUses {
-				if tu.ToolUseID != "" && tu.Name != "" {
-					toolNames[tu.ToolUseID] = tu.Name
-				}
-			}
-		}
-	}
+	toolNames := collectHistoryToolNames(history)
 
 	// Determine whether the last history assistant turn is the "active" tool turn
 	// answered by the current message. If so, its structured toolUses stay.

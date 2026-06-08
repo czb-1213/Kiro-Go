@@ -131,3 +131,83 @@ func TestClaudeToKiroKeepsActiveToolTurnStructured(t *testing.T) {
 		t.Fatalf("expected current tool result to answer t9, got %q", cur.UserInputMessageContext.ToolResults[0].ToolUseID)
 	}
 }
+
+func TestClaudeToKiroFlattensParallelActiveToolResults(t *testing.T) {
+	req := &ClaudeRequest{
+		Model: "claude-opus-4.8",
+		Tools: []ClaudeTool{
+			{Name: "Bash", Description: "run", InputSchema: map[string]interface{}{"type": "object"}},
+			{Name: "Read", Description: "read", InputSchema: map[string]interface{}{"type": "object"}},
+		},
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: "run two tools"},
+			{Role: "assistant", Content: []interface{}{
+				map[string]interface{}{"type": "tool_use", "id": "t1", "name": "Bash", "input": map[string]interface{}{"command": "pwd"}},
+				map[string]interface{}{"type": "tool_use", "id": "t2", "name": "Read", "input": map[string]interface{}{"file_path": "README.md"}},
+			}},
+			{Role: "user", Content: []interface{}{
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "t1", "content": "/repo"},
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "t2", "content": "readme text"},
+			}},
+		},
+	}
+
+	payload := ClaudeToKiro(req, false)
+
+	for i, h := range payload.ConversationState.History {
+		if h.AssistantResponseMessage != nil && len(h.AssistantResponseMessage.ToolUses) > 0 {
+			t.Fatalf("history[%d] kept parallel structured tool uses", i)
+		}
+	}
+	cur := payload.ConversationState.CurrentMessage.UserInputMessage
+	if cur.UserInputMessageContext != nil && len(cur.UserInputMessageContext.ToolResults) > 0 {
+		t.Fatalf("parallel current tool results must be flattened, got %#v", cur.UserInputMessageContext.ToolResults)
+	}
+	if !strings.Contains(cur.Content, "[Bash] /repo") || !strings.Contains(cur.Content, "[Read] readme text") {
+		t.Fatalf("expected flattened current content to preserve named tool results, got %q", cur.Content)
+	}
+}
+
+func TestOpenAIToKiroFlattensParallelActiveToolResults(t *testing.T) {
+	req := &OpenAIRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []OpenAIMessage{
+			{Role: "user", Content: "run two tools"},
+			{Role: "assistant", ToolCalls: []ToolCall{
+				{
+					ID:   "call_a",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "bash", Arguments: `{"command":"pwd"}`},
+				},
+				{
+					ID:   "call_b",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "read", Arguments: `{"file_path":"README.md"}`},
+				},
+			}},
+			{Role: "tool", ToolCallID: "call_a", Content: "/repo"},
+			{Role: "tool", ToolCallID: "call_b", Content: "readme text"},
+		},
+	}
+
+	payload := OpenAIToKiro(req, false)
+
+	for i, h := range payload.ConversationState.History {
+		if h.AssistantResponseMessage != nil && len(h.AssistantResponseMessage.ToolUses) > 0 {
+			t.Fatalf("history[%d] kept parallel structured tool uses", i)
+		}
+	}
+	cur := payload.ConversationState.CurrentMessage.UserInputMessage
+	if cur.UserInputMessageContext != nil && len(cur.UserInputMessageContext.ToolResults) > 0 {
+		t.Fatalf("parallel current tool results must be flattened, got %#v", cur.UserInputMessageContext.ToolResults)
+	}
+	if !strings.Contains(cur.Content, "[bash] /repo") || !strings.Contains(cur.Content, "[read] readme text") {
+		t.Fatalf("expected flattened current content to preserve named tool results, got %q", cur.Content)
+	}
+}
