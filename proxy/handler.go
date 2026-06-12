@@ -45,23 +45,46 @@ type Handler struct {
 }
 
 func (h *Handler) acquireAccountForModel(model string, excluded map[string]bool) *config.Account {
-	return h.acquireAccountForModelWithWait(model, excluded, accountAcquireWait, nil)
+	return h.acquireAccountForModelWithWait(model, excluded, accountAcquireWait, nil, false)
+}
+
+func (h *Handler) acquirePriorityAccountForModel(model string, excluded map[string]bool) *config.Account {
+	return h.acquireAccountForModelWithWait(model, excluded, accountAcquireWait, nil, true)
 }
 
 func (h *Handler) acquireAccountForModelForStream(model string, excluded map[string]bool, keepalive func()) *config.Account {
-	return h.acquireAccountForModelWithWait(model, excluded, streamAccountAcquireWait, keepalive)
+	return h.acquireAccountForModelWithWait(model, excluded, streamAccountAcquireWait, keepalive, false)
 }
 
-func (h *Handler) acquireAccountForModelWithWait(model string, excluded map[string]bool, wait time.Duration, keepalive func()) *config.Account {
+func (h *Handler) acquirePriorityAccountForModelForStream(model string, excluded map[string]bool, keepalive func()) *config.Account {
+	return h.acquireAccountForModelWithWait(model, excluded, streamAccountAcquireWait, keepalive, true)
+}
+
+func (h *Handler) acquireAccountForModelWithWait(model string, excluded map[string]bool, wait time.Duration, keepalive func(), priority bool) *config.Account {
 	deadline := time.Now().Add(wait)
 	nextKeepalive := time.Now().Add(streamAccountAcquireKeepalive)
+	registeredPriorityWaiter := false
+	defer func() {
+		if registeredPriorityWaiter {
+			h.pool.EndPriorityWait()
+		}
+	}()
 	for {
-		account, busy := h.pool.AcquireNextForModelExcluding(model, excluded)
+		account, busy := h.pool.AcquireNextForModelExcludingPriority(model, excluded, priority)
 		if account != nil {
 			return account
 		}
 		if !busy || time.Now().After(deadline) {
+			if busy {
+				logger.Warnf("[AccountAcquire] timed out waiting for account: model=%s priority=%t wait=%s excluded=%d", model, priority, wait, len(excluded))
+			} else {
+				logger.Warnf("[AccountAcquire] no eligible account: model=%s priority=%t excluded=%d", model, priority, len(excluded))
+			}
 			return nil
+		}
+		if priority && !registeredPriorityWaiter {
+			h.pool.BeginPriorityWait()
+			registeredPriorityWaiter = true
 		}
 		if keepalive != nil && !time.Now().Before(nextKeepalive) {
 			keepalive()
@@ -904,7 +927,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, payload *KiroPayload
 	}
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.acquireAccountForModelForStream(model, excluded, func() {
+		account := h.acquirePriorityAccountForModelForStream(model, excluded, func() {
 			h.sendSSEComment(w, flusher, "waiting for available account")
 		})
 		if account == nil {
@@ -1399,7 +1422,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, payload *KiroPayl
 	var lastErr error
 
 	for attempt := 0; attempt < maxAccountRetryAttempts; attempt++ {
-		account := h.acquireAccountForModel(model, excluded)
+		account := h.acquirePriorityAccountForModel(model, excluded)
 		if account == nil {
 			break
 		}

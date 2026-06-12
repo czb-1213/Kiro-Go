@@ -14,14 +14,15 @@ const tokenRefreshSkewSeconds int64 = 120
 
 // AccountPool 账号池
 type AccountPool struct {
-	mu            sync.RWMutex
-	accounts      []config.Account
-	totalAccounts int
-	currentIndex  uint64
-	cooldowns     map[string]time.Time       // 账号冷却时间
-	errorCounts   map[string]int             // 连续错误计数
-	modelLists    map[string]map[string]bool // accountID → set of modelIDs (from ListAvailableModels)
-	inFlight      map[string]int
+	mu              sync.RWMutex
+	accounts        []config.Account
+	totalAccounts   int
+	currentIndex    uint64
+	cooldowns       map[string]time.Time       // 账号冷却时间
+	errorCounts     map[string]int             // 连续错误计数
+	modelLists      map[string]map[string]bool // accountID → set of modelIDs (from ListAvailableModels)
+	inFlight        map[string]int
+	priorityWaiters int
 }
 
 var (
@@ -272,7 +273,25 @@ func (p *AccountPool) GetByID(id string) *config.Account {
 // AcquireNextForModelExcluding returns an eligible account and marks it busy
 // until Release is called. The boolean reports whether otherwise eligible
 // accounts were skipped only because they are already in flight.
+func (p *AccountPool) BeginPriorityWait() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.priorityWaiters++
+}
+
+func (p *AccountPool) EndPriorityWait() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.priorityWaiters > 0 {
+		p.priorityWaiters--
+	}
+}
+
 func (p *AccountPool) AcquireNextForModelExcluding(model string, excluded map[string]bool) (*config.Account, bool) {
+	return p.AcquireNextForModelExcludingPriority(model, excluded, false)
+}
+
+func (p *AccountPool) AcquireNextForModelExcludingPriority(model string, excluded map[string]bool, priority bool) (*config.Account, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -288,6 +307,9 @@ func (p *AccountPool) AcquireNextForModelExcluding(model string, excluded map[st
 	n := len(p.accounts)
 	seen := make(map[string]bool)
 	var busyEligible bool
+	if !priority && p.priorityWaiters > 0 {
+		busyEligible = true
+	}
 
 	for i := 0; i < n; i++ {
 		idx := atomic.AddUint64(&p.currentIndex, 1) % uint64(n)
@@ -313,6 +335,10 @@ func (p *AccountPool) AcquireNextForModelExcluding(model string, excluded map[st
 			continue
 		}
 		if isQuotaBlocked(*acc, allowOverUsage) {
+			seen[acc.ID] = true
+			continue
+		}
+		if !priority && p.priorityWaiters > 0 {
 			seen[acc.ID] = true
 			continue
 		}

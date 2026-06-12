@@ -267,6 +267,29 @@ func TestAcquireNextForModelExcludingSkipsInFlightAccount(t *testing.T) {
 	_ = busy
 }
 
+func TestAcquireNextForModelExcludingPriorityWaiterBlocksNormalAcquire(t *testing.T) {
+	p := newTestPool(config.Account{ID: "a"})
+
+	p.BeginPriorityWait()
+	defer p.EndPriorityWait()
+
+	normal, busy := p.AcquireNextForModelExcludingPriority("model", nil, false)
+	if normal != nil {
+		t.Fatalf("expected normal acquire to wait behind priority waiter, got %q", normal.ID)
+	}
+	if !busy {
+		t.Fatal("expected busy=true while normal acquire is held behind priority waiter")
+	}
+
+	priority, busy := p.AcquireNextForModelExcludingPriority("model", nil, true)
+	if priority == nil || priority.ID != "a" {
+		t.Fatalf("expected priority acquire to receive account a, got %#v", priority)
+	}
+	if busy {
+		t.Fatal("priority acquire should not report busy when account was free")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DisableAccount
 // ---------------------------------------------------------------------------
