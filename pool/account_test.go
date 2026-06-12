@@ -46,6 +46,24 @@ func TestOverLimitAccountsCanBeSelectedWhenUpstreamOverageEnabled(t *testing.T) 
 	}
 }
 
+func TestOverLimitAccountsAreSkippedWhenOverageCapReached(t *testing.T) {
+	p := &AccountPool{}
+	overLimit := config.Account{
+		ID:              "over",
+		UsageCurrent:    10,
+		UsageLimit:      10,
+		OverageStatus:   "ENABLED",
+		OverageCap:      100,
+		CurrentOverages: 100,
+	}
+
+	p.accounts = []config.Account{overLimit}
+
+	if acc := p.GetNext(); acc != nil {
+		t.Fatalf("expected nil when overage cap is reached, got %q", acc.ID)
+	}
+}
+
 func TestOverLimitAccountsRemainSkippedWhenUpstreamOverageDisabled(t *testing.T) {
 	p := &AccountPool{}
 	overLimit := config.Account{
@@ -341,6 +359,34 @@ func TestReloadKeepsOverQuotaAccountWhenAllowOverUsage(t *testing.T) {
 
 	if got := p.GetNext(); got == nil || got.ID != "over" {
 		t.Fatalf("expected over-quota account to remain routable when allowOverUsage=true, got %#v", got)
+	}
+}
+
+func TestReloadDropsAccountWhenOverageCapReachedDespiteAllowOverUsage(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Init(cfgFile); err != nil {
+		t.Fatalf("config.Init: %v", err)
+	}
+	if err := config.AddAccount(config.Account{
+		ID:              "over",
+		Enabled:         true,
+		UsageCurrent:    10,
+		UsageLimit:      10,
+		OverageStatus:   "ENABLED",
+		OverageCap:      100,
+		CurrentOverages: 100,
+	}); err != nil {
+		t.Fatalf("AddAccount: %v", err)
+	}
+	if err := config.UpdateAllowOverUsage(true); err != nil {
+		t.Fatalf("UpdateAllowOverUsage: %v", err)
+	}
+
+	p := newTestPool()
+	p.Reload()
+
+	if got := p.GetNext(); got != nil {
+		t.Fatalf("expected overage-cap account to be dropped, got %q", got.ID)
 	}
 }
 

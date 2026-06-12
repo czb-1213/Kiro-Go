@@ -18,7 +18,7 @@ import (
 )
 
 const tokenRefreshSkewSeconds int64 = 120
-const accountAcquireWait = 45 * time.Second
+const accountAcquireWait = 90 * time.Second
 const streamAccountAcquireWait = 10 * time.Minute
 const accountAcquirePollInterval = 250 * time.Millisecond
 const streamAccountAcquireKeepalive = 15 * time.Second

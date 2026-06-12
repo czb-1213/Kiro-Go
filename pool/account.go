@@ -556,10 +556,13 @@ func isOverUsageLimit(acc config.Account) bool {
 	return acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit
 }
 
-// isQuotaBlocked reports whether an over-quota account should be skipped:
-// the per-account upstream Overages switch (OverageStatus=ENABLED) and the
-// global allowOverUsage setting are the two ways to keep it routable.
+// isQuotaBlocked reports whether an over-quota account should be skipped.
+// The upstream overage cap is a hard stop: once reached, Kiro rejects requests
+// even if OverageStatus or the local allow-over-usage switch is enabled.
 func isQuotaBlocked(acc config.Account, allowOverUsage bool) bool {
+	if isOverageCapReached(acc) {
+		return true
+	}
 	return isOverUsageLimit(acc) && !isUpstreamOverageEnabled(acc) && !allowOverUsage
 }
 
@@ -567,6 +570,10 @@ func isQuotaBlocked(acc config.Account, allowOverUsage bool) bool {
 // "ENABLED" → true; anything else (DISABLED, UNKNOWN, empty) → false.
 func isUpstreamOverageEnabled(acc config.Account) bool {
 	return strings.EqualFold(acc.OverageStatus, "ENABLED")
+}
+
+func isOverageCapReached(acc config.Account) bool {
+	return acc.OverageCap > 0 && acc.CurrentOverages >= acc.OverageCap
 }
 
 func effectiveWeight(weight int) int {
